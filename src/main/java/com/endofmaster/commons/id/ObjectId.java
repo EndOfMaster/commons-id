@@ -1,357 +1,448 @@
 package com.endofmaster.commons.id;
 
 import java.io.Serializable;
-import java.lang.management.ManagementFactory;
-import java.net.NetworkInterface;
-import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.Date;
-import java.util.Enumeration;
 import java.util.concurrent.atomic.AtomicInteger;
 
+
 /**
- * @author ZM.Wang
+ * mongodb driver ObjectId
  */
 public final class ObjectId implements Comparable<ObjectId>, Serializable {
-    private static final long serialVersionUID = 3670079982654483072L;
-    private static final int LOW_ORDER_THREE_BYTES = 16777215;
-    private static final int MACHINE_IDENTIFIER;
-    private static final short PROCESS_IDENTIFIER;
-    private static final AtomicInteger NEXT_COUNTER = new AtomicInteger((new SecureRandom()).nextInt());
-    private static final char[] HEX_CHARS = new char[]{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
-    private final int timestamp;
-    private final int machineIdentifier;
-    private final short processIdentifier;
-    private final int counter;
 
+    private static final long serialVersionUID = 3670079982654483072L;
+
+    private static final int OBJECT_ID_LENGTH = 12;
+    private static final int LOW_ORDER_THREE_BYTES = 0x00ffffff;
+
+    // Use primitives to represent the 5-byte random value.
+    private static final int RANDOM_VALUE1;
+    private static final short RANDOM_VALUE2;
+
+    private static final AtomicInteger NEXT_COUNTER = new AtomicInteger(new SecureRandom().nextInt());
+
+    private static final char[] HEX_CHARS = new char[]{
+            '0', '1', '2', '3', '4', '5', '6', '7',
+            '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+
+    private final int timestamp;
+    private final int counter;
+    private final int randomValue1;
+    private final short randomValue2;
+
+    /**
+     * Gets a new object id.
+     *
+     * @return the new id
+     */
     public static ObjectId get() {
         return new ObjectId();
     }
 
-    public static boolean isValid(String hexString) {
+    /**
+     * Checks if a string could be an {@code ObjectId}.
+     *
+     * @param hexString a potential ObjectId as a String.
+     * @return whether the string could be an object id
+     * @throws IllegalArgumentException if hexString is null
+     */
+    public static boolean isValid(final String hexString) {
         if (hexString == null) {
             throw new IllegalArgumentException();
-        } else {
-            int len = hexString.length();
-            if (len != 24) {
-                return false;
-            } else {
-                for(int i = 0; i < len; ++i) {
-                    char c = hexString.charAt(i);
-                    if ((c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F')) {
-                        return false;
-                    }
-                }
-
-                return true;
-            }
         }
+
+        int len = hexString.length();
+        if (len != 24) {
+            return false;
+        }
+
+        for (int i = 0; i < len; i++) {
+            char c = hexString.charAt(i);
+            if (c >= '0' && c <= '9') {
+                continue;
+            }
+            if (c >= 'a' && c <= 'f') {
+                continue;
+            }
+            if (c >= 'A' && c <= 'F') {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 
-    public static int getGeneratedMachineIdentifier() {
-        return MACHINE_IDENTIFIER;
-    }
-
-    public static int getGeneratedProcessIdentifier() {
-        return PROCESS_IDENTIFIER;
-    }
-
-    public static int getCurrentCounter() {
-        return NEXT_COUNTER.get();
-    }
-
-    public static ObjectId createFromLegacyFormat(int time, int machine, int inc) {
-        return new ObjectId(time, machine, inc);
-    }
-
+    /**
+     * Create a new object id.
+     */
     public ObjectId() {
         this(new Date());
     }
 
-    public ObjectId(Date date) {
-        this(dateToTimestampSeconds(date), MACHINE_IDENTIFIER, PROCESS_IDENTIFIER, NEXT_COUNTER.getAndIncrement(), false);
+    /**
+     * Constructs a new instance using the given date.
+     *
+     * @param date the date
+     */
+    public ObjectId(final Date date) {
+        this(dateToTimestampSeconds(date), NEXT_COUNTER.getAndIncrement() & LOW_ORDER_THREE_BYTES, false);
     }
 
-    public ObjectId(Date date, int counter) {
-        this(date, MACHINE_IDENTIFIER, PROCESS_IDENTIFIER, counter);
+    /**
+     * Constructs a new instances using the given date and counter.
+     *
+     * @param date    the date
+     * @param counter the counter
+     * @throws IllegalArgumentException if the high order byte of counter is not zero
+     */
+    public ObjectId(final Date date, final int counter) {
+        this(dateToTimestampSeconds(date), counter, true);
     }
 
-    public ObjectId(Date date, int machineIdentifier, short processIdentifier, int counter) {
-        this(dateToTimestampSeconds(date), machineIdentifier, processIdentifier, counter);
+    /**
+     * Creates an ObjectId using the given time, machine identifier, process identifier, and counter.
+     *
+     * @param timestamp the time in seconds
+     * @param counter   the counter
+     * @throws IllegalArgumentException if the high order byte of counter is not zero
+     */
+    public ObjectId(final int timestamp, final int counter) {
+        this(timestamp, counter, true);
     }
 
-    public ObjectId(int timestamp, int machineIdentifier, short processIdentifier, int counter) {
-        this(timestamp, machineIdentifier, processIdentifier, counter, true);
+    private ObjectId(final int timestamp, final int counter, final boolean checkCounter) {
+        this(timestamp, RANDOM_VALUE1, RANDOM_VALUE2, counter, checkCounter);
     }
 
-    private ObjectId(int timestamp, int machineIdentifier, short processIdentifier, int counter, boolean checkCounter) {
-        if ((machineIdentifier & -16777216) != 0) {
+    private ObjectId(final int timestamp, final int randomValue1, final short randomValue2, final int counter,
+                     final boolean checkCounter) {
+        if ((randomValue1 & 0xff000000) != 0) {
             throw new IllegalArgumentException("The machine identifier must be between 0 and 16777215 (it must fit in three bytes).");
-        } else if (checkCounter && (counter & -16777216) != 0) {
-            throw new IllegalArgumentException("The counter must be between 0 and 16777215 (it must fit in three bytes).");
-        } else {
-            this.timestamp = timestamp;
-            this.machineIdentifier = machineIdentifier;
-            this.processIdentifier = processIdentifier;
-            this.counter = counter & 16777215;
         }
+        if (checkCounter && ((counter & 0xff000000) != 0)) {
+            throw new IllegalArgumentException("The counter must be between 0 and 16777215 (it must fit in three bytes).");
+        }
+        this.timestamp = timestamp;
+        this.counter = counter & LOW_ORDER_THREE_BYTES;
+        this.randomValue1 = randomValue1;
+        this.randomValue2 = randomValue2;
     }
 
-    public ObjectId(String hexString) {
+    /**
+     * Constructs a new instance from a 24-byte hexadecimal string representation.
+     *
+     * @param hexString the string to convert
+     * @throws IllegalArgumentException if the string is not a valid hex string representation of an ObjectId
+     */
+    public ObjectId(final String hexString) {
         this(parseHexString(hexString));
     }
 
-    public ObjectId(byte[] bytes) {
-        this(ByteBuffer.wrap(bytes));
+    /**
+     * Constructs a new instance from the given byte array
+     *
+     * @param bytes the byte array
+     * @throws IllegalArgumentException if array is null or not of length 12
+     */
+    public ObjectId(final byte[] bytes) {
+        this(ByteBuffer.wrap(isTrueArgument("bytes has length of 12", bytes, notNull("bytes", bytes).length == 12)));
     }
 
-    ObjectId(int timestamp, int machineAndProcessIdentifier, int counter) {
-        this(legacyToBytes(timestamp, machineAndProcessIdentifier, counter));
+    /**
+     * Constructs a new instance from the given ByteBuffer
+     *
+     * @param buffer the ByteBuffer
+     * @throws IllegalArgumentException if the buffer is null or does not have at least 12 bytes remaining
+     * @since 3.4
+     */
+    public ObjectId(final ByteBuffer buffer) {
+        notNull("buffer", buffer);
+        isTrueArgument("buffer.remaining() >=12", buffer.remaining() >= OBJECT_ID_LENGTH);
+
+        // Note: Cannot use ByteBuffer.getInt because it depends on tbe buffer's byte order
+        // and ObjectId's are always in big-endian order.
+        timestamp = makeInt(buffer.get(), buffer.get(), buffer.get(), buffer.get());
+        randomValue1 = makeInt((byte) 0, buffer.get(), buffer.get(), buffer.get());
+        randomValue2 = makeShort(buffer.get(), buffer.get());
+        counter = makeInt((byte) 0, buffer.get(), buffer.get(), buffer.get());
     }
 
-    public ObjectId(ByteBuffer buffer) {
-        isTrueArgument("buffer.remaining() >=12", buffer.remaining() >= 12);
-        this.timestamp = makeInt(buffer.get(), buffer.get(), buffer.get(), buffer.get());
-        this.machineIdentifier = makeInt((byte)0, buffer.get(), buffer.get(), buffer.get());
-        this.processIdentifier = (short)makeInt((byte)0, (byte)0, buffer.get(), buffer.get());
-        this.counter = makeInt((byte)0, buffer.get(), buffer.get(), buffer.get());
+    /**
+     * Convert to a byte array.  Note that the numbers are stored in big-endian order.
+     *
+     * @return the byte array
+     */
+    public byte[] toByteArray() {
+        ByteBuffer buffer = ByteBuffer.allocate(OBJECT_ID_LENGTH);
+        putToByteBuffer(buffer);
+        return buffer.array();  // using .allocate ensures there is a backing array that can be returned
     }
 
-    public static void isTrueArgument(String name, boolean condition) {
+    /**
+     * Convert to bytes and put those bytes to the provided ByteBuffer.
+     * Note that the numbers are stored in big-endian order.
+     *
+     * @param buffer the ByteBuffer
+     * @throws IllegalArgumentException if the buffer is null or does not have at least 12 bytes remaining
+     * @since 3.4
+     */
+    public void putToByteBuffer(final ByteBuffer buffer) {
+        notNull("buffer", buffer);
+        isTrueArgument("buffer.remaining() >=12", buffer.remaining() >= OBJECT_ID_LENGTH);
+
+        buffer.put(int3(timestamp));
+        buffer.put(int2(timestamp));
+        buffer.put(int1(timestamp));
+        buffer.put(int0(timestamp));
+        buffer.put(int2(randomValue1));
+        buffer.put(int1(randomValue1));
+        buffer.put(int0(randomValue1));
+        buffer.put(short1(randomValue2));
+        buffer.put(short0(randomValue2));
+        buffer.put(int2(counter));
+        buffer.put(int1(counter));
+        buffer.put(int0(counter));
+    }
+
+    /**
+     * Gets the timestamp (number of seconds since the Unix epoch).
+     *
+     * @return the timestamp
+     */
+    public int getTimestamp() {
+        return timestamp;
+    }
+
+    /**
+     * Gets the timestamp as a {@code Date} instance.
+     *
+     * @return the Date
+     */
+    public Date getDate() {
+        return new Date((timestamp & 0xFFFFFFFFL) * 1000L);
+    }
+
+    /**
+     * Converts this instance into a 24-byte hexadecimal string representation.
+     *
+     * @return a string representation of the ObjectId in hexadecimal format
+     */
+    public String toHexString() {
+        char[] chars = new char[OBJECT_ID_LENGTH * 2];
+        int i = 0;
+        for (byte b : toByteArray()) {
+            chars[i++] = HEX_CHARS[b >> 4 & 0xF];
+            chars[i++] = HEX_CHARS[b & 0xF];
+        }
+        return new String(chars);
+    }
+
+    @Override
+    public boolean equals(final Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+
+        ObjectId objectId = (ObjectId) o;
+
+        if (counter != objectId.counter) {
+            return false;
+        }
+        if (timestamp != objectId.timestamp) {
+            return false;
+        }
+
+        if (randomValue1 != objectId.randomValue1) {
+            return false;
+        }
+
+        if (randomValue2 != objectId.randomValue2) {
+            return false;
+        }
+
+        return true;
+    }
+
+    @Override
+    public int hashCode() {
+        int result = timestamp;
+        result = 31 * result + counter;
+        result = 31 * result + randomValue1;
+        result = 31 * result + randomValue2;
+        return result;
+    }
+
+    @Override
+    public int compareTo(final ObjectId other) {
+        if (other == null) {
+            throw new NullPointerException();
+        }
+
+        byte[] byteArray = toByteArray();
+        byte[] otherByteArray = other.toByteArray();
+        for (int i = 0; i < OBJECT_ID_LENGTH; i++) {
+            if (byteArray[i] != otherByteArray[i]) {
+                return ((byteArray[i] & 0xff) < (otherByteArray[i] & 0xff)) ? -1 : 1;
+            }
+        }
+        return 0;
+    }
+
+    @Override
+    public String toString() {
+        return toHexString();
+    }
+
+    static {
+        try {
+            SecureRandom secureRandom = new SecureRandom();
+            RANDOM_VALUE1 = secureRandom.nextInt(0x01000000);
+            RANDOM_VALUE2 = (short) secureRandom.nextInt(0x00008000);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static byte[] parseHexString(final String s) {
+        if (!isValid(s)) {
+            throw new IllegalArgumentException("invalid hexadecimal representation of an ObjectId: [" + s + "]");
+        }
+
+        byte[] b = new byte[OBJECT_ID_LENGTH];
+        for (int i = 0; i < b.length; i++) {
+            b[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
+        }
+        return b;
+    }
+
+    private static int dateToTimestampSeconds(final Date time) {
+        return (int) (time.getTime() / 1000);
+    }
+
+    // Big-Endian helpers, in this class because all other BSON numbers are little-endian
+
+    private static int makeInt(final byte b3, final byte b2, final byte b1, final byte b0) {
+        // CHECKSTYLE:OFF
+        return (((b3) << 24) |
+                ((b2 & 0xff) << 16) |
+                ((b1 & 0xff) << 8) |
+                ((b0 & 0xff)));
+        // CHECKSTYLE:ON
+    }
+
+    private static short makeShort(final byte b1, final byte b0) {
+        // CHECKSTYLE:OFF
+        return (short) (((b1 & 0xff) << 8) | ((b0 & 0xff)));
+        // CHECKSTYLE:ON
+    }
+
+    private static byte int3(final int x) {
+        return (byte) (x >> 24);
+    }
+
+    private static byte int2(final int x) {
+        return (byte) (x >> 16);
+    }
+
+    private static byte int1(final int x) {
+        return (byte) (x >> 8);
+    }
+
+    private static byte int0(final int x) {
+        return (byte) (x);
+    }
+
+    private static byte short1(final short x) {
+        return (byte) (x >> 8);
+    }
+
+    private static byte short0(final short x) {
+        return (byte) (x);
+    }
+
+    /**
+     * Throw IllegalArgumentException if the value is null.
+     *
+     * @param name  the parameter name
+     * @param value the value that should not be null
+     * @param <T>   the value type
+     * @return the value
+     * @throws IllegalArgumentException if value is null
+     */
+    public static <T> T notNull(final String name, final T value) {
+        if (value == null) {
+            throw new IllegalArgumentException(name + " can not be null");
+        }
+        return value;
+    }
+
+    /**
+     * Throw IllegalStateException if the condition if false.
+     *
+     * @param name      the name of the state that is being checked
+     * @param condition the condition about the parameter to check
+     * @throws IllegalStateException if the condition is false
+     */
+    public static void isTrue(final String name, final boolean condition) {
+        if (!condition) {
+            throw new IllegalStateException("state should be: " + name);
+        }
+    }
+
+    /**
+     * Throw IllegalArgumentException if the condition if false.
+     *
+     * @param name      the name of the state that is being checked
+     * @param condition the condition about the parameter to check
+     * @throws IllegalArgumentException if the condition is false
+     */
+    public static void isTrueArgument(final String name, final boolean condition) {
         if (!condition) {
             throw new IllegalArgumentException("state should be: " + name);
         }
     }
 
-    private static byte[] legacyToBytes(int timestamp, int machineAndProcessIdentifier, int counter) {
-        byte[] bytes = new byte[]{int3(timestamp), int2(timestamp), int1(timestamp), int0(timestamp), int3(machineAndProcessIdentifier), int2(machineAndProcessIdentifier), int1(machineAndProcessIdentifier), int0(machineAndProcessIdentifier), int3(counter), int2(counter), int1(counter), int0(counter)};
-        return bytes;
-    }
-
-    public byte[] toByteArray() {
-        ByteBuffer buffer = ByteBuffer.allocate(12);
-        this.putToByteBuffer(buffer);
-        return buffer.array();
-    }
-
-    public void putToByteBuffer(ByteBuffer buffer) {
-        isTrueArgument("buffer.remaining() >=12", buffer.remaining() >= 12);
-        buffer.put(int3(this.timestamp));
-        buffer.put(int2(this.timestamp));
-        buffer.put(int1(this.timestamp));
-        buffer.put(int0(this.timestamp));
-        buffer.put(int2(this.machineIdentifier));
-        buffer.put(int1(this.machineIdentifier));
-        buffer.put(int0(this.machineIdentifier));
-        buffer.put(short1(this.processIdentifier));
-        buffer.put(short0(this.processIdentifier));
-        buffer.put(int2(this.counter));
-        buffer.put(int1(this.counter));
-        buffer.put(int0(this.counter));
-    }
-
-    public int getTimestamp() {
-        return this.timestamp;
-    }
-
-    public int getMachineIdentifier() {
-        return this.machineIdentifier;
-    }
-
-    public short getProcessIdentifier() {
-        return this.processIdentifier;
-    }
-
-    public int getCounter() {
-        return this.counter;
-    }
-
-    public Date getDate() {
-        return new Date((long)this.timestamp * 1000L);
-    }
-
-    public String toHexString() {
-        char[] chars = new char[24];
-        int i = 0;
-        byte[] var3 = this.toByteArray();
-        int var4 = var3.length;
-
-        for(int var5 = 0; var5 < var4; ++var5) {
-            byte b = var3[var5];
-            chars[i++] = HEX_CHARS[b >> 4 & 15];
-            chars[i++] = HEX_CHARS[b & 15];
+    /**
+     * Throw IllegalArgumentException if the condition if false, otherwise return the value.  This is useful when arguments must be checked
+     * within an expression, as when using {@code this} to call another constructor, which must be the first line of the calling
+     * constructor.
+     *
+     * @param <T>       the value type
+     * @param name      the name of the state that is being checked
+     * @param value     the value of the argument
+     * @param condition the condition about the parameter to check
+     * @return          the value
+     * @throws java.lang.IllegalArgumentException if the condition is false
+     */
+    public static <T> T isTrueArgument(final String name, final T value, final boolean condition) {
+        if (!condition) {
+            throw new IllegalArgumentException("state should be: " + name);
         }
-
-        return new String(chars);
+        return value;
     }
 
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        } else if (o != null && this.getClass() == o.getClass()) {
-            ObjectId objectId = (ObjectId)o;
-            if (this.counter != objectId.counter) {
-                return false;
-            } else if (this.machineIdentifier != objectId.machineIdentifier) {
-                return false;
-            } else if (this.processIdentifier != objectId.processIdentifier) {
-                return false;
-            } else {
-                return this.timestamp == objectId.timestamp;
-            }
-        } else {
-            return false;
+    /**
+     * Cast an object to the given class and return it, or throw IllegalArgumentException if it's not assignable to that class.
+     *
+     * @param clazz        the class to cast to
+     * @param value        the value to cast
+     * @param errorMessage the error message to include in the exception
+     * @param <T>          the Class type
+     * @return value cast to clazz
+     * @throws IllegalArgumentException if value is not assignable to clazz
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> T convertToType(final Class<T> clazz, final Object value, final String errorMessage) {
+        if (!clazz.isAssignableFrom(value.getClass())) {
+            throw new IllegalArgumentException(errorMessage);
         }
-    }
-
-    public int hashCode() {
-        int result = this.timestamp;
-        result = 31 * result + this.machineIdentifier;
-        result = 31 * result + this.processIdentifier;
-        result = 31 * result + this.counter;
-        return result;
-    }
-
-    public int compareTo(ObjectId other) {
-        if (other == null) {
-            throw new NullPointerException();
-        } else {
-            byte[] byteArray = this.toByteArray();
-            byte[] otherByteArray = other.toByteArray();
-
-            for(int i = 0; i < 12; ++i) {
-                if (byteArray[i] != otherByteArray[i]) {
-                    return (byteArray[i] & 255) < (otherByteArray[i] & 255) ? -1 : 1;
-                }
-            }
-
-            return 0;
-        }
-    }
-
-    public String toString() {
-        return this.toHexString();
-    }
-
-    /** @deprecated */
-    @Deprecated
-    public int getTimeSecond() {
-        return this.timestamp;
-    }
-
-    /** @deprecated */
-    @Deprecated
-    public long getTime() {
-        return (long)this.timestamp * 1000L;
-    }
-
-    /** @deprecated */
-    @Deprecated
-    public String toStringMongod() {
-        return this.toHexString();
-    }
-
-    private static int createMachineIdentifier() {
-        int machinePiece;
-        try {
-            StringBuilder sb = new StringBuilder();
-            Enumeration e = NetworkInterface.getNetworkInterfaces();
-
-            while(e.hasMoreElements()) {
-                NetworkInterface ni = (NetworkInterface)e.nextElement();
-                sb.append(ni.toString());
-                byte[] mac = ni.getHardwareAddress();
-                if (mac != null) {
-                    ByteBuffer bb = ByteBuffer.wrap(mac);
-
-                    try {
-                        sb.append(bb.getChar());
-                        sb.append(bb.getChar());
-                        sb.append(bb.getChar());
-                    } catch (BufferUnderflowException var7) {
-                        ;
-                    }
-                }
-            }
-
-            machinePiece = sb.toString().hashCode();
-        } catch (Throwable var8) {
-            machinePiece = (new SecureRandom()).nextInt();
-        }
-
-        machinePiece &= 16777215;
-        return machinePiece;
-    }
-
-    private static short createProcessIdentifier() {
-        short processId;
-        try {
-            String processName = ManagementFactory.getRuntimeMXBean().getName();
-            if (processName.contains("@")) {
-                processId = (short)Integer.parseInt(processName.substring(0, processName.indexOf(64)));
-            } else {
-                processId = (short)ManagementFactory.getRuntimeMXBean().getName().hashCode();
-            }
-        } catch (Throwable var2) {
-            processId = (short)(new SecureRandom()).nextInt();
-        }
-
-        return processId;
-    }
-
-    private static byte[] parseHexString(String s) {
-        if (!isValid(s)) {
-            throw new IllegalArgumentException("invalid hexadecimal representation of an MongoId: [" + s + "]");
-        } else {
-            byte[] b = new byte[12];
-
-            for(int i = 0; i < b.length; ++i) {
-                b[i] = (byte)Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
-            }
-
-            return b;
-        }
-    }
-
-    private static int dateToTimestampSeconds(Date time) {
-        return (int)(time.getTime() / 1000L);
-    }
-
-    private static int makeInt(byte b3, byte b2, byte b1, byte b0) {
-        return b3 << 24 | (b2 & 255) << 16 | (b1 & 255) << 8 | b0 & 255;
-    }
-
-    private static byte int3(int x) {
-        return (byte)(x >> 24);
-    }
-
-    private static byte int2(int x) {
-        return (byte)(x >> 16);
-    }
-
-    private static byte int1(int x) {
-        return (byte)(x >> 8);
-    }
-
-    private static byte int0(int x) {
-        return (byte)x;
-    }
-
-    private static byte short1(short x) {
-        return (byte)(x >> 8);
-    }
-
-    private static byte short0(short x) {
-        return (byte)x;
-    }
-
-    static {
-        try {
-            MACHINE_IDENTIFIER = createMachineIdentifier();
-            PROCESS_IDENTIFIER = createProcessIdentifier();
-        } catch (Exception var1) {
-            throw new RuntimeException(var1);
-        }
+        return (T) value;
     }
 }

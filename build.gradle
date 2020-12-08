@@ -1,27 +1,28 @@
 buildscript {
     repositories {
+        maven { url 'https://maven.aliyun.com/repository/central' }
         jcenter()
-    }
-    dependencies {
-        classpath 'com.jfrog.bintray.gradle:gradle-bintray-plugin:1.7.3'
     }
 }
 
-group 'com.endofmaster'
-version '1.0.1'
+plugins {
+    id 'maven'
+    id 'java-library'
+    id "com.jfrog.bintray" version "1.8.5"
+}
 
-apply plugin: 'java'
-apply plugin: 'maven'
-apply plugin: 'com.jfrog.bintray'
+group = 'com.endofmaster'
+version = '1.0.2'
+sourceCompatibility = '11'
 
 repositories {
+    maven { url 'https://maven.aliyun.com/repository/central' }
     mavenLocal()
-    jcenter()
 }
 
 dependencies {
 
-    testCompile 'junit:junit:4.12'
+    testCompileOnly 'org.junit.jupiter:junit-jupiter:5.7.0'
 }
 
 bintray {
@@ -44,5 +45,4 @@ bintray {
     }
 }
 
-// 代码文件以UTF-8编码，注意：不加该设置可能报“错误: 编码GBK的不可映射字符”
 [compileJava, compileTestJava, javadoc]*.options*.encoding = 'UTF-8'
